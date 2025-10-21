@@ -1,0 +1,36 @@
+{
+  "name": "analyzer-agent",
+  "version": "1.0.0",
+  "description": "A persistent agent for performance analysis using CDP.",
+  "main": "dist/index.js",
+  "scripts": {
+    "start": "node dist/index.js",
+    "build": "tsc",
+    "dev": "tsc -w & nodemon dist/index.js",
+    "client": "ts-node src/client.ts",
+    "trace:start": "curl -X POST http://localhost:3000/trace/start",
+    "trace:stop": "curl -X POST http://localhost:3000/trace/stop",
+    "trace:analyze": "curl -X POST http://localhost:3000/trace/analyze",
+    "trace:navigate": "curl -X POST -H \"Content-Type: application/json\" -d \"{\\\"url\\\":\\\"https://vmmv-uat.luxottica.com/v/5.5.2/demo/demo.html?key=95702A5E-1523-4ADD-AC16-5CE7062F7E32\\\"}\" http://localhost:3000/navigate"
+  },
+  "keywords": [
+    "cdp",
+    "performance",
+    "puppeteer"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "axios": "^1.12.2",
+    "dotenv": "^17.2.3",
+    "express": "^4.19.2",
+    "puppeteer": "^22.10.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.12.12",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  }
+}
