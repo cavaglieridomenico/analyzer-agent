@@ -9,6 +9,7 @@ class PersistentAgent {
   public browser: Browser | null = null;
   public client: CDPSession | null = null;
   public page: Page | null = null;
+  private scriptMap = new Map<string, string>(); // Map from URL to scriptId
 
   /**
    * Launches a new Chrome browser instance and establishes a CDP connection.
@@ -32,35 +33,52 @@ class PersistentAgent {
 
     // Create a CDP session to send raw CDP commands
     this.client = await this.page.target().createCDPSession();
+
+    // Listen for script parsed events to build our URL -> scriptId map
+    this.client.on("Debugger.scriptParsed", (event) => {
+      if (event.url) {
+        this.scriptMap.set(event.url, event.scriptId);
+        console.log(
+          `[AGENT-MAP]: Mapped URL ${event.url} to scriptId ${event.scriptId}`
+        );
+      }
+    });
+
     // Enable necessary CDP domains
     await this.client.send("Page.enable");
-    await this.client.send("Debugger.enable"); // Enable the Debugger domain
+    await this.client.send("Debugger.enable"); // This must be enabled for scriptParsed events
 
     console.log("CDP connection established.");
   }
 
   /**
-   * NEW METHOD: Retrieves source map details for a given script ID.
-   * @param {string} scriptId - The ID of the script.
-   * @returns {Promise<string | null>} The URL of the source map, or null if none exists.
+   * Retrieves source map details for a script using its URL.
+   * @param {string} scriptUrl - The URL of the script from the trace.
+   * @returns {Promise<string | null>} The absolute URL of the source map, or null if none exists.
    */
-  async getSourceMapUrl(scriptId: string): Promise<string | null> {
+  async getSourceMapUrl(scriptUrl: string): Promise<string | null> {
     if (!this.client) {
       throw new Error("Agent not launched or Debugger not enabled");
     }
-    console.log(`[AGENT]: Fetching source map URL for script ${scriptId}...`);
+
+    const scriptId = this.scriptMap.get(scriptUrl);
+    if (!scriptId) {
+      console.warn(`[AGENT]: No scriptId found in map for URL: ${scriptUrl}`);
+      return null;
+    }
+
+    console.log(
+      `[AGENT]: Found live scriptId ${scriptId} for URL ${scriptUrl}. Fetching source...`
+    );
     try {
-      // Get script details which include the sourceMapURL
       const response = await this.client.send("Debugger.getScriptSource", {
-        scriptId: scriptId,
+        scriptId,
       });
 
-      let sourceMapUrl = null;
-      // The CDP response may include a sourceMapURL property directly
+      let sourceMapUrl: string | null = null;
       if (response && (response as any).sourceMapURL) {
         sourceMapUrl = (response as any).sourceMapURL;
-      } else {
-        // If not, it might be embedded as a comment in the script source
+      } else if (response && response.scriptSource) {
         const source = response.scriptSource;
         const match = source.match(/\/\/# sourceMappingURL=(.*)/);
         if (match && match[1]) {
@@ -69,20 +87,19 @@ class PersistentAgent {
       }
 
       if (sourceMapUrl) {
-        console.log(`[AGENT]: Found source map URL: ${sourceMapUrl}`);
-        // The URL might be relative, so we need to resolve it against the script's URL.
-        // This part will be handled in the analysis controller.
-        return sourceMapUrl;
+        console.log(`[AGENT]: Found source map URL comment: ${sourceMapUrl}`);
+        return new URL(sourceMapUrl, scriptUrl).toString();
       } else {
-        console.log(`[AGENT]: No source map URL found for script ${scriptId}`);
+        console.log(
+          `[AGENT]: No source map URL found in script source for scriptId ${scriptId}.`
+        );
         return null;
       }
     } catch (error) {
       console.error(
-        `[AGENT]: Failed to get source map info for script ${scriptId}`,
+        `[AGENT]: Failed to get source for scriptId ${scriptId} (URL: ${scriptUrl})`,
         error
       );
-      // Don't throw, just return null if source map isn't found
       return null;
     }
   }

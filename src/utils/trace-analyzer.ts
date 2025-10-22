@@ -11,81 +11,78 @@ export function findWorstBottleneck(traceData: { traceEvents: any[] }) {
     "[SERVER]: Analyzing trace locally to find the worst bottleneck..."
   );
 
-  // Prioritize long tasks that have a stack trace, as they are the most actionable.
-  const longTasksWithStack = traceData.traceEvents.filter(
-    (event) =>
-      event.ph === "X" && // 'X' denotes a complete event
-      event.dur > 50000 && // duration is in microseconds (50ms = 50,000µs)
-      event.cat?.includes("devtools.timeline") &&
-      event.args?.data?.stackTrace?.length > 0
-  );
-
-  let worstTask;
-
-  if (longTasksWithStack.length > 0) {
-    worstTask = longTasksWithStack.reduce(
-      (max, task) => (task.dur > max.dur ? task : max),
-      longTasksWithStack[0]
-    );
-  } else {
-    // If no tasks with stack traces are found, find the longest task overall.
-    const allLongTasks = traceData.traceEvents.filter(
+  // Find the single longest task event, which acts as a container for child events.
+  const longestTask = traceData.traceEvents
+    .filter(
       (event) =>
         event.ph === "X" &&
         event.dur > 50000 &&
         event.cat?.includes("devtools.timeline")
-    );
+    )
+    .reduce((max, event) => (event.dur > max.dur ? event : max), { dur: 0 });
 
-    if (allLongTasks.length === 0) {
-      return {
-        summary: "No long tasks were found. The trace appears to be clean.",
-      };
-    }
-    worstTask = allLongTasks.reduce(
-      (max, task) => (task.dur > max.dur ? task : max),
-      allLongTasks[0]
-    );
+  if (longestTask.dur === 0) {
+    return {
+      summary: "No long tasks were found. The trace appears to be clean.",
+    };
   }
 
-  // Find child events to populate the 'details'
-  const taskStartTime = worstTask.ts;
-  const taskEndTime = worstTask.ts + worstTask.dur;
-  const childEvents = traceData.traceEvents
-    .filter(
-      (event) =>
-        event.ts >= taskStartTime &&
-        event.ts < taskEndTime &&
-        event.pid === worstTask.pid &&
-        event.tid === worstTask.tid &&
-        event !== worstTask // Exclude the task itself
-    )
-    .map((e) => ({
-      name: e.name,
-      dur_ms: e.dur / 1000,
-      category: e.cat,
-      details: e.args,
-    }));
+  // Now, find the longest "FunctionCall" within the timeframe of the longest task.
+  // This is where the actionable stack information will be.
+  const taskStartTime = longestTask.ts;
+  const taskEndTime = longestTask.ts + longestTask.dur;
 
-  // Extract raw stack trace info if available, but don't resolve it here.
-  const stackTrace = worstTask.args?.data?.stackTrace;
-  const topFrame = stackTrace && stackTrace.length > 0 ? stackTrace[0] : null;
+  const childFunctionCalls = traceData.traceEvents.filter(
+    (event) =>
+      event.name === "FunctionCall" &&
+      event.ts >= taskStartTime &&
+      event.ts < taskEndTime &&
+      event.pid === longestTask.pid &&
+      event.tid === longestTask.tid
+  );
+
+  if (childFunctionCalls.length === 0) {
+    return {
+      summary: `A long task of ${
+        longestTask.dur / 1000
+      }ms was found, but it contained no specific FunctionCall events to analyze.`,
+    };
+  }
+
+  // Find the longest function call within the parent task
+  const worstFunctionCall = childFunctionCalls.reduce(
+    (max, event) => (event.dur > max.dur ? event : max),
+    { dur: 0 }
+  );
+
+  const functionCallData = worstFunctionCall.args.data;
+  let stackFrame = null;
+
+  // The trace gives 0-indexed line/column, but source-map needs 1-indexed.
+  if (
+    functionCallData &&
+    functionCallData.url &&
+    functionCallData.lineNumber != null &&
+    functionCallData.columnNumber != null
+  ) {
+    stackFrame = {
+      scriptId: functionCallData.scriptId,
+      url: functionCallData.url,
+      lineNumber: functionCallData.lineNumber + 1, // Convert to 1-indexed
+      columnNumber: functionCallData.columnNumber + 1, // Convert to 1-indexed
+    };
+  }
 
   return {
-    eventName: worstTask.name,
-    category: worstTask.cat,
-    duration_ms: worstTask.dur / 1000,
-    // Raw data for the controller to use
-    stackFrame: topFrame
-      ? {
-          scriptId: topFrame.scriptId,
-          url: topFrame.url,
-          lineNumber: topFrame.lineNumber,
-          columnNumber: topFrame.columnNumber,
-        }
-      : null,
+    eventName: `${longestTask.name} > ${worstFunctionCall.name}`,
+    category: worstFunctionCall.cat,
+    duration_ms: worstFunctionCall.dur / 1000,
+    // Raw data for the controller to use, extracted from the FunctionCall
+    stackFrame: stackFrame,
     details: {
-      original_args: worstTask.args,
-      childEvents: childEvents.slice(0, 15),
+      parent_task_duration_ms: longestTask.dur / 1000,
+      function_name: functionCallData.functionName,
+      original_args: worstFunctionCall.args,
     },
   };
 }

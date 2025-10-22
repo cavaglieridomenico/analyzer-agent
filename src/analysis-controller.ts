@@ -15,7 +15,7 @@ const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 async function makeApiCall(prompt: string) {
   let attempts = 0;
   const maxRetries = 3;
-  const timeout = 30000; // 30 seconds
+  const timeout = 60000; // 60 seconds
 
   while (attempts < maxRetries) {
     try {
@@ -56,19 +56,66 @@ async function resolveSourceLocation(
   line: number,
   column: number
 ) {
+  console.log(
+    `[ANALYZER-DEBUG]: Resolving location for line: ${line}, column: ${column}`
+  );
+  console.log(
+    `[ANALYZER-DEBUG]: Attempting to fetch source map from: ${sourceMapUrl}`
+  );
   try {
     const { data: sourceMap } = await axios.get(sourceMapUrl);
+    console.log("[ANALYZER-DEBUG]: Source map fetched successfully.");
+
     const consumer = await new SourceMapConsumer(sourceMap);
+    console.log("[ANALYZER-DEBUG]: SourceMapConsumer created.");
+
     const originalPosition = consumer.originalPositionFor({
       line,
       column,
+      bias: SourceMapConsumer.GREATEST_LOWER_BOUND,
     });
-    consumer.destroy();
-    return originalPosition;
+
+    console.log(
+      "[ANALYZER-DEBUG]: Result from originalPositionFor:",
+      JSON.stringify(originalPosition)
+    );
+
+    if (
+      originalPosition.source &&
+      originalPosition.line != null &&
+      originalPosition.column != null
+    ) {
+      consumer.destroy();
+      return originalPosition;
+    } else {
+      console.warn(
+        "[ANALYZER-DEBUG]: originalPositionFor returned nulls. Iterating first 10 mappings for debugging..."
+      );
+      let count = 0;
+      consumer.eachMapping((mapping) => {
+        if (count < 10) {
+          console.log(
+            "[ANALYZER-DEBUG]: Mapping:",
+            JSON.stringify({
+              source: mapping.source,
+              generatedLine: mapping.generatedLine,
+              generatedColumn: mapping.generatedColumn,
+              originalLine: mapping.originalLine,
+              originalColumn: mapping.originalColumn,
+              name: mapping.name,
+            })
+          );
+        }
+        count++;
+      });
+      console.log(`[ANALYZER-DEBUG]: Total mappings found: ${count}`);
+      consumer.destroy();
+      return null;
+    }
   } catch (error) {
     console.error(
-      `[ANALYZER]: Failed to fetch or parse source map from ${sourceMapUrl}`,
-      error
+      `[ANALYZER-ERROR]: Failed during source map processing for ${sourceMapUrl}`,
+      error instanceof Error ? error.message : String(error)
     );
     return null;
   }
@@ -82,6 +129,16 @@ async function getAnalysis(bottleneck: any) {
     return `Analysis skipped: ${bottleneck.summary}`;
   }
 
+  // Create a minimal payload to ensure the request is small
+  const promptData = {
+    eventName: bottleneck.eventName,
+    duration_ms: bottleneck.duration_ms,
+    // Use optional chaining for safety, provide a default if null
+    originalSourceLocation: bottleneck.originalSourceLocation
+      ? `${bottleneck.originalSourceLocation.source}:${bottleneck.originalSourceLocation.line}:${bottleneck.originalSourceLocation.column}`
+      : "Source map location not resolved",
+  };
+
   const prompt = `
     You are an expert web performance analyst. I have captured a performance trace and
     identified the single worst bottleneck.
@@ -89,15 +146,13 @@ async function getAnalysis(bottleneck: any) {
     Analyze the following JSON object which describes this task. The 'originalSourceLocation'
     field contains the exact location in the original source code.
 
-    ${JSON.stringify(bottleneck, null, 2)}
+    ${JSON.stringify(promptData, null, 2)}
 
     Provide a report in markdown format with the following sections:
     1.  **Root Cause Analysis:** Based on the task details, what is happening at **${
-      bottleneck.originalSourceLocation?.source
-    }:${bottleneck.originalSourceLocation?.line}** that is causing a ${
-    bottleneck.duration_ms
-  }ms bottleneck?
-    2.  **Actionable Solution:** Provide a specific code improvement or strategy to fix the issue. Write a code snippet showing the "before" and "after" based on the identified bottleneck.
+      promptData.originalSourceLocation
+    }** that is causing a ${promptData.duration_ms}ms bottleneck?
+    2.  **Actionable Solution:** Provide a specific code improvement or strategy to fix the issue.
     3.  **Verification:** How can I verify that the fix has worked?
     `;
 
@@ -123,19 +178,54 @@ export async function analyzeTraceFile(
 
   // 3. Resolve the source location using the agent
   if (bottleneck.stackFrame) {
+    console.log(
+      "[SERVER]: Stack frame found. Attempting to resolve source location..."
+    );
     const { scriptId, url, lineNumber, columnNumber } = bottleneck.stackFrame;
-    const sourceMapUrl = await agent.getSourceMapUrl(scriptId);
 
-    if (sourceMapUrl) {
-      // Resolve the full URL for the source map
-      const fullSourceMapUrl = new URL(sourceMapUrl, url).toString();
-      const originalLocation = await resolveSourceLocation(
+    // The agent now handles the logic of finding the source map URL
+    const fullSourceMapUrl = await agent.getSourceMapUrl(url);
+
+    if (fullSourceMapUrl) {
+      console.log(
+        `[SERVER]: Agent returned full source map URL: ${fullSourceMapUrl}`
+      );
+
+      let originalLocation = await resolveSourceLocation(
         fullSourceMapUrl,
         lineNumber,
         columnNumber
       );
+
+      // If the initial lookup fails, retry with common line numbers for minified files
+      if (!originalLocation) {
+        console.log(
+          "[SERVER]: Initial source map lookup failed. Retrying with common line numbers..."
+        );
+        for (let i = 1; i <= 5; i++) {
+          console.log(`[SERVER]: Retrying with line number: ${i}`);
+          originalLocation = await resolveSourceLocation(
+            fullSourceMapUrl,
+            i, // Use the retry line number
+            columnNumber
+          );
+          if (originalLocation) {
+            console.log(
+              `[SERVER]: Successfully resolved location on line ${i}.`
+            );
+            break; // Exit loop on success
+          }
+        }
+      }
+      console.log("[SERVER]: Resolved original location:", originalLocation);
       (bottleneck as any).originalSourceLocation = originalLocation;
+    } else {
+      console.log("[SERVER]: Agent could not resolve the source map URL.");
     }
+  } else {
+    console.log(
+      "[SERVER]: No stack frame found for the bottleneck. Cannot resolve source location."
+    );
   }
 
   // 4. Send that bottleneck to Gemini for expert analysis
