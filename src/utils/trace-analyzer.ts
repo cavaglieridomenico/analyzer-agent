@@ -1,6 +1,76 @@
 // src/utils/trace-analyzer.ts
 
 /**
+ * Finds the stack frame from the most significant FunctionCall within a given parent event.
+ * @param traceData The full trace data.
+ * @param parentEvent The event to search within (e.g., Animation Frame Fired).
+ * @returns A stack frame object or null if not found.
+ */
+function findStackInTrace(
+  traceData: { traceEvents: any[] },
+  parentEvent: any
+): any {
+  // First, check if the parent event itself has a stack frame.
+  // This handles cases where the bottleneck is a FunctionCall.
+  const parentEventData = parentEvent.args?.data;
+  if (
+    parentEvent.name === "FunctionCall" &&
+    parentEventData &&
+    parentEventData.url &&
+    parentEventData.lineNumber != null &&
+    parentEventData.columnNumber != null
+  ) {
+    return {
+      scriptId: parentEventData.scriptId,
+      url: parentEventData.url,
+      lineNumber: parentEventData.lineNumber + 1, // Convert to 1-indexed
+      columnNumber: parentEventData.columnNumber + 1, // Convert to 1-indexed
+    };
+  }
+
+  // If the parent event doesn't have a stack, search its children.
+  // This handles cases like "Animation Frame Fired" which contains other calls.
+  const children = traceData.traceEvents.filter(
+    (e) =>
+      e.ts >= parentEvent.ts &&
+      e.ts + e.dur <= parentEvent.ts + parentEvent.dur &&
+      e.pid === parentEvent.pid &&
+      e.tid === parentEvent.tid &&
+      e !== parentEvent
+  );
+
+  const functionCalls = children.filter((e) => e.name === "FunctionCall");
+
+  if (functionCalls.length === 0) {
+    return null;
+  }
+
+  const longestFunctionCall = functionCalls.reduce(
+    (max, event) => (event.dur > max.dur ? event : max),
+    { dur: 0 }
+  );
+
+  if (longestFunctionCall.dur > 0) {
+    const eventData = longestFunctionCall.args?.data;
+    if (
+      eventData &&
+      eventData.url &&
+      eventData.lineNumber != null &&
+      eventData.columnNumber != null
+    ) {
+      return {
+        scriptId: eventData.scriptId,
+        url: eventData.url,
+        lineNumber: eventData.lineNumber + 1, // Convert to 1-indexed
+        columnNumber: eventData.columnNumber + 1, // Convert to 1-indexed
+      };
+    }
+  }
+
+  return null; // No stack frame found.
+}
+
+/**
  * Analyzes the trace data to find the most significant performance bottleneck.
  * It finds the longest task and extracts its details and stack trace for further analysis.
  * @param traceData The raw trace event data.
@@ -27,62 +97,75 @@ export function findWorstBottleneck(traceData: { traceEvents: any[] }) {
     };
   }
 
-  // Now, find the longest "FunctionCall" within the timeframe of the longest task.
-  // This is where the actionable stack information will be.
+  // Now, find the most significant child event within the timeframe of the longest task.
   const taskStartTime = longestTask.ts;
   const taskEndTime = longestTask.ts + longestTask.dur;
 
-  const childFunctionCalls = traceData.traceEvents.filter(
-    (event) =>
-      event.name === "FunctionCall" &&
-      event.ts >= taskStartTime &&
-      event.ts < taskEndTime &&
-      event.pid === longestTask.pid &&
-      event.tid === longestTask.tid
-  );
+  const candidateEventNames = [
+    "Animation Frame Fired",
+    "RunMicrotasks",
+    "FunctionCall",
+  ];
 
-  if (childFunctionCalls.length === 0) {
+  let worstChildEvent: any = { dur: 0 };
+
+  for (const eventName of candidateEventNames) {
+    const childEvents = traceData.traceEvents.filter(
+      (event) =>
+        event.name === eventName &&
+        event.ts >= taskStartTime &&
+        event.ts < taskEndTime &&
+        event.pid === longestTask.pid &&
+        event.tid === longestTask.tid
+    );
+
+    if (childEvents.length > 0) {
+      const longestChild = childEvents.reduce(
+        (max, event) => (event.dur > max.dur ? event : max),
+        { dur: 0 }
+      );
+      if (longestChild.dur > worstChildEvent.dur) {
+        worstChildEvent = longestChild;
+      }
+    }
+  }
+
+  if (worstChildEvent.dur === 0) {
     return {
       summary: `A long task of ${
         longestTask.dur / 1000
-      }ms was found, but it contained no specific FunctionCall events to analyze.`,
+      }ms was found, but it contained no specific child events to analyze (looked for: ${candidateEventNames.join(
+        ", "
+      )}).`,
     };
   }
 
-  // Find the longest function call within the parent task
-  const worstFunctionCall = childFunctionCalls.reduce(
-    (max, event) => (event.dur > max.dur ? event : max),
-    { dur: 0 }
-  );
+  const bottleneckEvent = worstChildEvent;
+  const stackFrame = findStackInTrace(traceData, bottleneckEvent);
 
-  const functionCallData = worstFunctionCall.args.data;
-  let stackFrame = null;
-
-  // The trace gives 0-indexed line/column, but source-map needs 1-indexed.
-  if (
-    functionCallData &&
-    functionCallData.url &&
-    functionCallData.lineNumber != null &&
-    functionCallData.columnNumber != null
-  ) {
-    stackFrame = {
-      scriptId: functionCallData.scriptId,
-      url: functionCallData.url,
-      lineNumber: functionCallData.lineNumber + 1, // Convert to 1-indexed
-      columnNumber: functionCallData.columnNumber + 1, // Convert to 1-indexed
+  if (!stackFrame) {
+    // This is where the log message comes from.
+    // We return an object with a summary, but no stackFrame.
+    return {
+      summary: `A bottleneck event (${bottleneckEvent.name}) was found, but no stack frame could be located within it.`,
+      details: {
+        parent_task_duration_ms: longestTask.dur / 1000,
+        bottleneck_duration_ms: bottleneckEvent.dur / 1000,
+        function_name: bottleneckEvent.args?.data?.functionName || "N/A",
+        original_args: bottleneckEvent.args,
+      },
     };
   }
 
   return {
-    eventName: `${longestTask.name} > ${worstFunctionCall.name}`,
-    category: worstFunctionCall.cat,
-    duration_ms: worstFunctionCall.dur / 1000,
-    // Raw data for the controller to use, extracted from the FunctionCall
+    eventName: `${longestTask.name} > ${bottleneckEvent.name}`,
+    category: bottleneckEvent.cat,
+    duration_ms: bottleneckEvent.dur / 1000,
     stackFrame: stackFrame,
     details: {
       parent_task_duration_ms: longestTask.dur / 1000,
-      function_name: functionCallData.functionName,
-      original_args: worstFunctionCall.args,
+      function_name: bottleneckEvent.args?.data?.functionName || "N/A",
+      original_args: bottleneckEvent.args,
     },
   };
 }
