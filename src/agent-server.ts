@@ -53,7 +53,7 @@ function createServer(agent: PersistentAgent): Express {
   // Endpoint to analyze the trace file
   app.post("/trace/analyze", async (req: Request, res: Response) => {
     try {
-      const analysisReport = await analyzeTraceFile();
+      const analysisReport = await analyzeTraceFile(agent); // Pass the agent instance
       const reportPath = "analysis-report.md";
       await fs.writeFile(reportPath, analysisReport);
       console.log(`Analysis report saved to ${reportPath}`);

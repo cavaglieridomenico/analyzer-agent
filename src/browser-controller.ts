@@ -34,8 +34,57 @@ class PersistentAgent {
     this.client = await this.page.target().createCDPSession();
     // Enable necessary CDP domains
     await this.client.send("Page.enable");
+    await this.client.send("Debugger.enable"); // Enable the Debugger domain
 
     console.log("CDP connection established.");
+  }
+
+  /**
+   * NEW METHOD: Retrieves source map details for a given script ID.
+   * @param {string} scriptId - The ID of the script.
+   * @returns {Promise<string | null>} The URL of the source map, or null if none exists.
+   */
+  async getSourceMapUrl(scriptId: string): Promise<string | null> {
+    if (!this.client) {
+      throw new Error("Agent not launched or Debugger not enabled");
+    }
+    console.log(`[AGENT]: Fetching source map URL for script ${scriptId}...`);
+    try {
+      // Get script details which include the sourceMapURL
+      const response = await this.client.send("Debugger.getScriptSource", {
+        scriptId: scriptId,
+      });
+
+      let sourceMapUrl = null;
+      // The CDP response may include a sourceMapURL property directly
+      if (response && (response as any).sourceMapURL) {
+        sourceMapUrl = (response as any).sourceMapURL;
+      } else {
+        // If not, it might be embedded as a comment in the script source
+        const source = response.scriptSource;
+        const match = source.match(/\/\/# sourceMappingURL=(.*)/);
+        if (match && match[1]) {
+          sourceMapUrl = match[1].trim();
+        }
+      }
+
+      if (sourceMapUrl) {
+        console.log(`[AGENT]: Found source map URL: ${sourceMapUrl}`);
+        // The URL might be relative, so we need to resolve it against the script's URL.
+        // This part will be handled in the analysis controller.
+        return sourceMapUrl;
+      } else {
+        console.log(`[AGENT]: No source map URL found for script ${scriptId}`);
+        return null;
+      }
+    } catch (error) {
+      console.error(
+        `[AGENT]: Failed to get source map info for script ${scriptId}`,
+        error
+      );
+      // Don't throw, just return null if source map isn't found
+      return null;
+    }
   }
 
   /**
