@@ -12,8 +12,10 @@ lerna-debug.log*
 
 # Reports
 trace.json
+trace-*.json
 analysis-report.md
 *.md
+!README.md
 
 # IDE
 .vscode/
