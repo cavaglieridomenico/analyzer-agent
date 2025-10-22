@@ -6,8 +6,8 @@ import { findWorstBottleneck } from "./utils/trace-analyzer";
 
 // --- AI/API Configuration ---
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro" });
-//const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+//const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro" });
+const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
 // --- 1. API HELPER (To handle 503 errors and timeouts) ---
 async function makeApiCall(prompt: string) {
