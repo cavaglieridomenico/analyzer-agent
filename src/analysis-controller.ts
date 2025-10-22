@@ -2,6 +2,7 @@
 import fs from "fs/promises";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import "dotenv/config";
+import { findWorstBottleneck } from "./utils/trace-analyzer";
 
 // --- AI/API Configuration ---
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
@@ -45,61 +46,6 @@ async function makeApiCall(prompt: string) {
   const finalError = new Error("API call failed after multiple retries.");
   console.error(finalError.message);
   throw finalError;
-}
-
-// --- 2. LOCAL ANALYZER (Refined to add child event context) ---
-function findWorstBottleneck(traceData: { traceEvents: any[] }) {
-  console.log(
-    "[SERVER]: Analyzing trace locally to find the worst bottleneck..."
-  );
-
-  const longTasks = traceData.traceEvents.filter(
-    (event) =>
-      event.ph === "X" && // 'X' denotes a complete event with a duration
-      event.dur > 50000 && // duration is in microseconds (50ms = 50,000µs)
-      event.cat &&
-      event.cat.includes("devtools.timeline")
-  );
-
-  if (longTasks.length === 0) {
-    return { summary: "No tasks over 50ms were found in the trace." };
-  }
-
-  const worstTask = longTasks.reduce(
-    (max, task) => (task.dur > max.dur ? task : max),
-    longTasks[0]
-  );
-
-  // Find child events to populate the 'details'
-  const taskStartTime = worstTask.ts;
-  const taskEndTime = worstTask.ts + worstTask.dur;
-  const childEvents = traceData.traceEvents
-    .filter(
-      (event) =>
-        event.ts >= taskStartTime &&
-        event.ts < taskEndTime &&
-        event.pid === worstTask.pid &&
-        event.tid === worstTask.tid &&
-        event !== worstTask // Exclude the task itself
-    )
-    .map((e) => ({
-      name: e.name,
-      dur_ms: e.dur / 1000,
-      category: e.cat,
-      details: e.args,
-    }));
-
-  return {
-    description: "Found the single longest task and its direct children.",
-    eventName: worstTask.name,
-    category: worstTask.cat,
-    startTime_ms: worstTask.ts / 1000,
-    duration_ms: worstTask.dur / 1000,
-    details: {
-      original_args: worstTask.args,
-      childEvents: childEvents.slice(0, 15), // Include top 15 children for context
-    },
-  };
 }
 
 // --- 3. AI ANALYZER (Sends bottleneck to Gemini) ---
