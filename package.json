@@ -11,7 +11,7 @@
     "trace:start": "curl -X POST http://localhost:3000/trace/start",
     "trace:stop": "curl -X POST http://localhost:3000/trace/stop",
     "trace:analyze": "curl -X POST http://localhost:3000/trace/analyze",
-    "trace:navigate": "curl -X POST -H \"Content-Type: application/json\" -d \"{\\\"url\\\":\\\"https://vmmv-uat.luxottica.com/v/5.5.2/demo/demo.html?key=95702A5E-1523-4ADD-AC16-5CE7062F7E32\\\"}\" http://localhost:3000/navigate"
+    "trace:navigate": "curl -X POST -H \"Content-Type: application/json\" -d \"{\\\"url\\\":\\\"https://vmmv-uat.luxottica.com/v/5.5.2/demo/demo.html?key=95702A5E-1523-4ADD-AC16-5CE7062F7E31\\\"}\" http://localhost:3000/navigate"
   },
   "keywords": [
     "cdp",
