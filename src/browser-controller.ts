@@ -1,5 +1,5 @@
 import puppeteer, { Browser, CDPSession, Page, KnownDevices } from "puppeteer";
-import fs from "fs";
+import fs from "fs/promises";
 
 /**
  * The PersistentAgent class is responsible for managing the browser instance
@@ -10,6 +10,25 @@ class PersistentAgent {
   public client: CDPSession | null = null;
   public page: Page | null = null;
   private scriptMap = new Map<string, string>(); // Map from URL to scriptId
+  private _currentTracePath: string | null = null;
+
+  private async _getUniqueTracePath(): Promise<string> {
+    const traceDir = "."; // Current directory
+    const files = await fs.readdir(traceDir);
+    const traceFiles = files.filter(file => file.startsWith("trace-") && file.endsWith(".json"));
+
+    let maxNumber = 0;
+    for (const file of traceFiles) {
+      const match = file.match(/trace-(\d+).json/);
+      if (match && match[1]) {
+        const num = parseInt(match[1], 10);
+        if (!isNaN(num) && num > maxNumber) {
+          maxNumber = num;
+        }
+      }
+    }
+    return `trace-${maxNumber + 1}.json`;
+  }
 
   /**
    * Launches a new Chrome browser instance and establishes a CDP connection.
@@ -113,7 +132,8 @@ class PersistentAgent {
     }
 
     // Start tracing with specific categories
-    await this.page.tracing.start({ path: 'trace.json', screenshots: true });
+    this._currentTracePath = await this._getUniqueTracePath();
+    await this.page.tracing.start({ path: this._currentTracePath, screenshots: true });
     console.log("Performance trace started.");
   }
 
@@ -133,14 +153,15 @@ class PersistentAgent {
    * Stops the performance trace and saves the data to a file.
    * @returns {Promise<void>} A promise that resolves when the trace is saved.
    */
-  async stopTrace(): Promise<void> {
-    if (!this.page) {
-      throw new Error("Agent has not been launched.");
+  async stopTrace(): Promise<string> {
+    if (!this.page || !this._currentTracePath) {
+      throw new Error("Agent has not been launched or trace path not set.");
     }
     console.log("Performance trace stopping...");
 
     await this.page.tracing.stop();
-    console.log("Trace data saved to trace.json");
+    console.log(`Trace data saved to ${this._currentTracePath}`);
+    return this._currentTracePath;
   }
 }
 

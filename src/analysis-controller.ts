@@ -166,11 +166,12 @@ async function getAnalysis(bottleneck: any) {
  * and sends it to Gemini for analysis.
  */
 export async function analyzeTraceFile(
-  agent: PersistentAgent
+  agent: PersistentAgent,
+  tracePath: string
 ): Promise<string> {
   // 1. Read the trace file
-  console.log("[SERVER]: Reading trace.json file...");
-  const traceFile = await fs.readFile("trace.json", "utf8");
+  console.log(`[SERVER]: Reading ${tracePath} file...`);
+  const traceFile = await fs.readFile(tracePath, "utf8");
   const traceData = JSON.parse(traceFile);
 
   // 2. Find the worst bottleneck LOCALLY

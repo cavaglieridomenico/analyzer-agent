@@ -12,6 +12,7 @@ function createServer(agent: PersistentAgent): Express {
   const app: Express = express();
   app.use(express.json());
   const port = 3000;
+  let lastTracePath: string | null = null;
 
   // Endpoint to start a performance trace
   app.post("/trace/start", async (req: Request, res: Response) => {
@@ -27,8 +28,8 @@ function createServer(agent: PersistentAgent): Express {
   // Endpoint to stop a performance trace
   app.post("/trace/stop", async (req: Request, res: Response) => {
     try {
-      await agent.stopTrace();
-      res.send({ message: "Performance trace stopped" });
+      lastTracePath = await agent.stopTrace();
+      res.send({ message: "Performance trace stopped", tracePath: lastTracePath });
     } catch (error) {
       console.error(error);
       res.status(500).send({ error: "Failed to stop trace" });
@@ -53,7 +54,10 @@ function createServer(agent: PersistentAgent): Express {
   // Endpoint to analyze the trace file
   app.post("/trace/analyze", async (req: Request, res: Response) => {
     try {
-      const analysisReport = await analyzeTraceFile(agent); // Pass the agent instance
+      if (!lastTracePath) {
+        return res.status(400).send({ error: "No trace available to analyze. Please run /trace/stop first." });
+      }
+      const analysisReport = await analyzeTraceFile(agent, lastTracePath); // Pass the agent instance and trace path
       const reportPath = "analysis-report.md";
       await fs.writeFile(reportPath, analysisReport);
       console.log(`Analysis report saved to ${reportPath}`);
