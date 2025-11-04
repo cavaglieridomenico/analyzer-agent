@@ -108,29 +108,12 @@ class PersistentAgent {
    * Start a performance trace. Navigation is handled separately via `navigate()`.
    */
   async startTrace(): Promise<void> {
-    if (!this.page || !this.client) {
+    if (!this.page) {
       throw new Error("Agent has not been launched.");
     }
 
     // Start tracing with specific categories
-    await this.client.send("Tracing.start", {
-      transferMode: "ReturnAsStream",
-      traceConfig: {
-        includedCategories: [
-          "-*", // Exclude everything first to be safe
-          "devtools.timeline",
-          "disabled-by-default-devtools.timeline",
-          "disabled-by-default-devtools.timeline.frame",
-          "disabled-by-default-devtools.timeline.stack",
-          "disabled-by-default-v8.cpu_profiler",
-          "disabled-by-default-v8.cpu_profiler.hires",
-          "latencyInfo",
-          "v8.execute", // Often needed for detailed JS profiling
-          "blink.user_timing", // User Timing API marks
-          "loading", // Network activity related
-        ],
-      },
-    });
+    await this.page.tracing.start({ path: 'trace.json', screenshots: true });
     console.log("Performance trace started.");
   }
 
@@ -151,53 +134,13 @@ class PersistentAgent {
    * @returns {Promise<void>} A promise that resolves when the trace is saved.
    */
   async stopTrace(): Promise<void> {
-    if (!this.client) {
+    if (!this.page) {
       throw new Error("Agent has not been launched.");
     }
     console.log("Performance trace stopping...");
 
-    return new Promise(async (resolve) => {
-      this.client!.once("Tracing.tracingComplete", async (event) => {
-        const tracePath = "trace.json";
-        const streamHandle = event.stream;
-
-        if (!streamHandle) {
-          console.warn("No trace stream handle found. Writing empty trace.");
-          fs.writeFileSync(tracePath, "{}");
-          resolve();
-          return;
-        }
-
-        const writeStream = fs.createWriteStream(tracePath);
-
-        const readStream = async (handle: string) => {
-          let eof = false;
-          while (!eof) {
-            try {
-              const { data, eof: readEof } = await this.client!.send(
-                "IO.read",
-                {
-                  handle,
-                }
-              );
-              writeStream.write(data);
-              eof = readEof;
-            } catch (e) {
-              console.error("Error reading trace stream:", e);
-              break;
-            }
-          }
-          await this.client!.send("IO.close", { handle });
-          writeStream.end();
-          console.log(`Trace data saved to ${tracePath}`);
-          resolve();
-        };
-        await readStream(streamHandle);
-      });
-      if (this.client) {
-        await this.client.send("Tracing.end");
-      }
-    });
+    await this.page.tracing.stop();
+    console.log("Trace data saved to trace.json");
   }
 }
 

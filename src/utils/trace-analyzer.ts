@@ -71,6 +71,33 @@ function findStackInTrace(
 }
 
 /**
+ * Finds the last screenshot taken before a given timestamp.
+ * @param traceData The full trace data.
+ * @param timestamp The timestamp to search before.
+ * @returns The data of the last screenshot or null if not found.
+ */
+function getScreenshot(traceData: { traceEvents: any[] }, timestamp: number) {
+  const screenshots = traceData.traceEvents.filter(
+    (e) => e.name === "Screenshot"
+  );
+
+  if (screenshots.length === 0) {
+    return null;
+  }
+
+  const lastScreenshot = screenshots
+    .filter((s) => s.ts < timestamp)
+    .reduce((max, s) => (s.ts > max.ts ? s : max), { ts: 0 });
+
+  if (lastScreenshot.ts > 0) {
+    return lastScreenshot.args.snapshot;
+  }
+
+  return null;
+}
+
+
+/**
  * Analyzes the trace data to find the most significant performance bottleneck.
  * It finds the longest task and extracts its details and stack trace for further analysis.
  * @param traceData The raw trace event data.
@@ -142,6 +169,7 @@ export function findWorstBottleneck(traceData: { traceEvents: any[] }) {
 
   const bottleneckEvent = worstChildEvent;
   const stackFrame = findStackInTrace(traceData, bottleneckEvent);
+  const screenshot = getScreenshot(traceData, bottleneckEvent.ts);
 
   if (!stackFrame) {
     // This is where the log message comes from.
@@ -154,6 +182,7 @@ export function findWorstBottleneck(traceData: { traceEvents: any[] }) {
         function_name: bottleneckEvent.args?.data?.functionName || "N/A",
         original_args: bottleneckEvent.args,
       },
+      screenshot,
     };
   }
 
@@ -167,5 +196,6 @@ export function findWorstBottleneck(traceData: { traceEvents: any[] }) {
       function_name: bottleneckEvent.args?.data?.functionName || "N/A",
       original_args: bottleneckEvent.args,
     },
+    screenshot,
   };
 }
